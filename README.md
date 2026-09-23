@@ -35,5 +35,5 @@ install.packages(c("dplyr","ggplot2","glmnet","gglasso","MASS","corrplot","vcd",
                    "RColorBrewer","broom","tibble","tidyr","readr","stringr","pacman"))
 ```
 
-## Credits
-[TODO: team members]
+## Team
+Irina Bran, Timo Descazeaud, Hippolyte Ducatillon, Theo Fontaine, Brieuc Vesval.
