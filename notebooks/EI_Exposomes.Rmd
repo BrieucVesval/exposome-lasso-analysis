@@ -1,0 +1,182 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+### Charger les données 
+
+file_path <- "../data/exposome.RData"
+load(file_path)
+
+### Analyse exploratoire des données 
+
+# Installer et charger les packages nécessaires
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("tidyr")) install.packages("tidyr")
+if (!require("corrplot")) install.packages("corrplot")
+if (!require("vcd")) install.packages("vcd") # Pour le V de Cramér
+if (!require("tibble")) install.packages("tibble")
+
+
+# Charger les packages
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(vcd)
+library(tibble)
+
+# Analyse des statistiques descriptives
+summary(exposome)
+summary(covariates)
+summary(phenotype)
+
+# Distribution des phénotypes (exemple avec le poids à la naissance)
+ggplot(phenotype, aes(x = e3_bw)) +
+  geom_histogram(binwidth = 100, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution du poids à la naissance", x = "Poids à la naissance (g)", y = "Fréquence")
+
+# Distribution des expositions (exemple avec NO2)
+ggplot(exposome, aes(x = hs_no2_dy_hs_h_Log)) +
+  geom_histogram(binwidth = 0.1, fill = "red", color = "black", alpha = 0.7) +
+  labs(title = "Distribution des niveaux de NO2", x = "Log(Niveaux de NO2)", y = "Fréquence")
+
+# Corrélations entre les covariates et les phénotypes
+covariates_numeric <- covariates %>% select_if(is.numeric)
+phenotype_numeric <- phenotype %>% select_if(is.numeric)
+corr_matrix <- cor(covariates_numeric, phenotype_numeric, use = "complete.obs")
+
+# Visualisation des corrélations
+corrplot(corr_matrix, method = "color", tl.col = "black", tl.srt = 45)
+
+### Corrélations entre les exposomes et les phénotypes
+
+
+
+# Charger les données
+file_path <- "../data/exposome.RData"
+load(file_path)
+
+# Calculer les corrélations entre variables numériques
+cor_numerics <- function(df1, df2) {
+  num_vars1 <- df1 %>% select_if(is.numeric)
+  num_vars2 <- df2 %>% select_if(is.numeric)
+  
+  cor_matrix <- cor(num_vars1, num_vars2, use = "complete.obs")
+  return(cor_matrix)
+}
+
+# Calculer le V de Cramér pour les variables catégorielles
+cramers_v <- function(x, y) {
+  tab <- table(x, y)
+  chi2 <- chisq.test(tab)$statistic
+  n <- sum(tab)
+  return(sqrt(chi2 / (n * (min(nrow(tab), ncol(tab)) - 1))))
+}
+
+# Calculer les corrélations entre variables catégorielles
+cor_factors <- function(df1, df2) {
+  factor_vars1 <- df1 %>% select_if(is.factor)
+  factor_vars2 <- df2 %>% select_if(is.factor)
+  
+  cor_matrix <- matrix(NA, ncol = ncol(factor_vars2), nrow = ncol(factor_vars1))
+  rownames(cor_matrix) <- colnames(factor_vars1)
+  colnames(cor_matrix) <- colnames(factor_vars2)
+  
+  for (i in 1:ncol(factor_vars1)) {
+    for (j in 1:ncol(factor_vars2)) {
+      cor_matrix[i, j] <- cramers_v(factor_vars1[[i]], factor_vars2[[j]])
+    }
+  }
+  return(cor_matrix)
+}
+
+# Calculer les corrélations mixtes (numérique vs facteur)
+cor_mixed <- function(df1, df2) {
+  num_vars1 <- df1 %>% select_if(is.numeric)
+  factor_vars2 <- df2 %>% select_if(is.factor)
+  
+  cor_matrix <- matrix(NA, ncol = ncol(factor_vars2), nrow = ncol(num_vars1))
+  rownames(cor_matrix) <- colnames(num_vars1)
+  colnames(cor_matrix) <- colnames(factor_vars2)
+  
+  for (i in 1:ncol(num_vars1)) {
+    for (j in 1:ncol(factor_vars2)) {
+      cor_matrix[i, j] <- summary(lm(num_vars1[[i]] ~ factor_vars2[[j]]))$r.squared
+    }
+  }
+  return(cor_matrix)
+}
+
+# Combiner les matrices de corrélation
+combine_cor_matrices <- function(num_cor, fac_cor, mix_cor1, mix_cor2) {
+  # Combine numeric vs numeric and factor vs factor
+  combined_matrix <- rbind(
+    cbind(num_cor, mix_cor1),
+    cbind(t(mix_cor2), fac_cor)
+  )
+  return(combined_matrix)
+}
+
+# Calculer les corrélations
+num_cor <- cor_numerics(exposome, phenotype)
+fac_cor <- cor_factors(exposome, phenotype)
+mix_cor1 <- cor_mixed(exposome, phenotype)
+mix_cor2 <- cor_mixed(phenotype, exposome)
+
+# Combiner les matrices de corrélation
+combined_cor_matrix <- combine_cor_matrices(num_cor, fac_cor, mix_cor1, mix_cor2)
+
+# Visualiser les corrélations
+corrplot(combined_cor_matrix, method = "color", tl.col ="black",tl.cex = 0.8, cl.cex = 0.8,
+         title = "Corrélations entre exposomes et phénotypes", 
+         mar = c(0, 0, 1, 0))
+
+### Corrélation par famille 
+
+# Calculer les corrélations entre chaque exposome et chaque phénotype
+cor_matrix <- cor(exposome %>% select_if(is.numeric), phenotype %>% select_if(is.numeric), use = "complete.obs")
+
+# Convertir la matrice de corrélation en data frame pour faciliter les calculs
+cor_df <- as.data.frame(as.table(cor_matrix))
+
+# Ajouter les informations de famille pour chaque exposome
+cor_df <- cor_df %>%
+  mutate(Family = codebook$family[match(Var1, codebook$variable_name)])
+
+# Filtrer les lignes sans famille
+cor_df <- cor_df %>% filter(!is.na(Family))
+
+# Calculer la moyenne des corrélations par famille pour chaque phénotype
+avg_cor_df <- cor_df %>%
+  group_by(Family, Var2) %>%
+  summarise(AverageCorrelation = mean(Freq, na.rm = TRUE)) %>%
+  ungroup()
+
+# Convertir le résultat en matrice pour la visualisation
+avg_cor_matrix <- avg_cor_df %>%
+  spread(key = Var2, value = AverageCorrelation) %>%
+  column_to_rownames("Family") %>%
+  as.matrix()
+
+# Visualiser les corrélations moyennes
+corrplot(avg_cor_matrix, method = "color", tl.cex = 0.8, cl.cex = 0.8,
+         title = "Corrélations moyennes par famille d'exposomes et phénotypes", 
+         mar = c(0, 0, 1, 0))
+
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

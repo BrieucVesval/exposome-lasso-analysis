@@ -1,0 +1,227 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les données
+file_path <- "../data/exposome.RData"
+load(file_path)
+# Charger les packages
+library(ggplot2)
+library(dplyr)
+
+### ACP initiale avec tout 
+
+analyze_pca <- function(exposome, covariates) {
+  # Sélectionner les colonnes numériques pour l'ACP
+  exposome_numeric <- exposome %>% select_if(is.numeric)
+  
+  # Vérifier s'il y a des valeurs manquantes et les supprimer
+  exposome_numeric <- na.omit(exposome_numeric)
+  
+  # Normaliser les données
+  exposome_scaled <- scale(exposome_numeric)
+  
+  # Réaliser l'ACP
+  pca <- prcomp(exposome_scaled, center = TRUE, scale. = TRUE)
+  
+  # Créer un DataFrame avec les résultats de l'ACP
+  pca_df <- data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2])
+  
+  # Visualiser les résultats
+  ggplot(pca_df, aes(x = PC1, y = PC2)) +
+    geom_point(size = 3, alpha = 0.7) +
+    labs(title = "Analyse en Composantes Principales (ACP) ", x = "PC1", y = "PC2", color = "Cohorte") +
+    theme_minimal()
+}
+
+### ACP par Cohorte
+
+# Définir la fonction
+analyze_pca_by_cohort <- function(exposome, covariates) {
+  # Sélectionner les colonnes numériques pour l'ACP
+  exposome_numeric <- exposome %>% select_if(is.numeric)
+  
+  # Vérifier s'il y a des valeurs manquantes et les supprimer
+  exposome_numeric <- na.omit(exposome_numeric)
+  
+  # Normaliser les données
+  exposome_scaled <- scale(exposome_numeric)
+  
+  # Réaliser l'ACP
+  pca <- prcomp(exposome_scaled, center = TRUE, scale. = TRUE)
+  
+  # Créer un DataFrame avec les résultats de l'ACP
+  pca_df <- data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2])
+  
+  # Ajouter la cohorte pour la coloration
+  pca_df <- cbind(pca_df, Cohort = covariates$h_cohort)
+  
+  # Visualiser les résultats
+  ggplot(pca_df, aes(x = PC1, y = PC2, color = as.factor(Cohort))) +
+    geom_point(size = 3, alpha = 0.7) +
+    labs(title = "Analyse en Composantes Principales (ACP) par cohortes", x = "PC1", y = "PC2", color = "Cohorte") +
+    theme_minimal()
+}
+
+
+### ACP par famille d'exposomes
+
+# Définir la fonction pour calculer les scores d'exposition par famille
+calculate_family_scores <- function(exposome, codebook) {
+  families <- unique(codebook$family)
+  
+  # Créer un dataframe pour stocker les scores d'exposition par famille
+  family_scores <- data.frame(ID = exposome$ID)
+  
+  for (family in families) {
+    # Sélectionner les variables de la famille courante
+    family_vars <- codebook %>% filter(family == !!family) %>% pull(variable_name)
+    
+    # Vérifier que les variables existent dans exposome
+    family_vars <- family_vars[family_vars %in% colnames(exposome)]
+    
+    if (length(family_vars) > 0) {
+      # Sélectionner uniquement les colonnes numériques
+      family_numeric_vars <- exposome %>% select(all_of(family_vars)) %>% select_if(is.numeric)
+      
+      if (ncol(family_numeric_vars) > 0) {
+        # Calculer la somme des expositions pour chaque individu pour la famille courante
+        family_scores[[family]] <- rowSums(family_numeric_vars, na.rm = TRUE)
+      } else {
+        # Si aucune variable numérique n'est trouvée, remplir avec NA
+        family_scores[[family]] <- NA
+      }
+    } else {
+      # Si aucune variable n'est trouvée, remplir avec NA
+      family_scores[[family]] <- NA
+    }
+  }
+  
+  # Remplacer les NA par des zéros pour permettre le calcul des dominances
+  family_scores[is.na(family_scores)] <- 0
+  
+  return(family_scores)
+}
+
+# Définir la fonction pour réaliser l'ACP avec coloration par famille dominante
+analyze_pca_by_dominant_family <- function(exposome, codebook) {
+  # Calculer les scores d'exposition par famille
+  family_scores <- calculate_family_scores(exposome, codebook)
+  
+  # Afficher un aperçu des scores d'exposition par famille pour diagnostic
+  print(summary(family_scores))
+  
+  # Déterminer la famille dominante pour chaque individu
+  family_scores$dominant_family <- colnames(family_scores)[max.col(family_scores[, -1], ties.method = "first")]
+  
+  # Joindre l'information de famille dominante avec l'exposome
+  exposome <- cbind(exposome, dominant_family = family_scores$dominant_family)
+  
+  # Sélectionner les colonnes numériques pour l'ACP
+  exposome_numeric <- exposome %>% select_if(is.numeric)
+  
+  # Vérifier s'il y a des valeurs manquantes et les supprimer
+  complete_cases <- complete.cases(exposome_numeric)
+  exposome_numeric <- exposome_numeric[complete_cases, ]
+  exposome <- exposome[complete_cases, ]
+  
+  # Normaliser les données
+  exposome_scaled <- scale(exposome_numeric)
+  
+  # Réaliser l'ACP
+  pca <- prcomp(exposome_scaled, center = TRUE, scale. = TRUE)
+  
+  # Créer un DataFrame avec les résultats de l'ACP
+  pca_df <- data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2])
+  
+  # Ajouter la famille dominante pour la coloration
+  pca_df <- cbind(pca_df, Family = exposome$dominant_family)
+  
+  # Visualiser les résultats
+  ggplot(pca_df, aes(x = PC1, y = PC2, color = Family)) +
+    geom_point(size = 3, alpha = 0.7) +
+    labs(title = "Analyse en Composantes Principales (ACP)", x = "PC1", y = "PC2", color = "Famille dominante") +
+    theme_minimal()
+}
+
+### ACP Prénatale 
+
+# Fonction pour filtrer les colonnes prénatales et réaliser l'ACP
+analyze_pca_preg_exposomes <- function(exposome) {
+  # Filtrer les colonnes contenant "preg" dans leur nom
+  preg_exposomes <- exposome %>% select(contains("preg"))
+  
+  # Vérifier s'il y a des valeurs manquantes et les supprimer
+  preg_exposomes <- preg_exposomes %>% select_if(is.numeric) %>% na.omit()
+  
+  # Normaliser les données
+  preg_exposomes_scaled <- scale(preg_exposomes)
+  
+  # Réaliser l'ACP
+  pca <- prcomp(preg_exposomes_scaled, center = TRUE, scale. = TRUE)
+  
+  # Créer un DataFrame avec les résultats de l'ACP
+  pca_df <- data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2])
+  
+  # Visualiser les résultats
+  ggplot(pca_df, aes(x = PC1, y = PC2)) +
+    geom_point(size = 3, alpha = 0.7) +
+    labs(title = "Analyse en Composantes Principales (ACP) sur les exposomes prénataux",
+         x = "PC1", y = "PC2") +
+    theme_minimal()
+}
+
+### ACP Prenatale par cohorte 
+
+
+# Fonction pour filtrer les colonnes prénatales et réaliser l'ACP
+analyze_pca_preg_exposomes_by_cohort <- function(exposome,covariates) {
+  # Filtrer les colonnes contenant "preg" dans leur nom
+  preg_exposomes <- exposome %>% select(contains("preg"))
+  
+  # Vérifier s'il y a des valeurs manquantes et les supprimer
+  preg_exposomes <- preg_exposomes %>% select_if(is.numeric) %>% na.omit()
+  
+  # Normaliser les données
+  preg_exposomes_scaled <- scale(preg_exposomes)
+  
+  # Réaliser l'ACP
+  pca <- prcomp(preg_exposomes_scaled, center = TRUE, scale. = TRUE)
+  
+  # Créer un DataFrame avec les résultats de l'ACP
+  pca_df <- data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2])
+  
+  # Ajouter la cohorte pour la coloration
+  pca_df <- cbind(pca_df, Cohort = covariates$h_cohort)
+  
+  # Visualiser les résultats
+  ggplot(pca_df, aes(x = PC1, y = PC2,color = as.factor(Cohort))) +
+    geom_point(size = 3, alpha = 0.7) +
+    labs(title = "Analyse en Composantes Principales (ACP) sur les exposomes prénataux",
+         x = "PC1", y = "PC2",color="Cohorte") +
+    theme_minimal()
+}
+### ACP en coloriant par
+
+
+
+analyze_pca(exposome,covariates)
+analyze_pca_by_cohort(exposome,covariates)
+analyze_pca_by_dominant_family(exposome, codebook)
+analyze_pca_preg_exposomes(exposome)
+analyze_pca_preg_exposomes_by_cohort(exposome,covariates)
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

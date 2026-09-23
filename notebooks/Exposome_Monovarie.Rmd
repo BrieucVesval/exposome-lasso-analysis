@@ -1,0 +1,208 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les packages nécessaires
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("tibble")) install.packages("tibble")
+if (!require("glmnet")) install.packages("glmnet")
+if (!require("RColorBrewer")) install.packages("RColorBrewer")
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(glmnet)
+library(RColorBrewer)
+
+# Charger les données
+load("../data/exposome.RData")
+file_path <- "processed_exposome.RData"
+load(file_path)
+
+# Covariables spécifiées
+specified_covariates <- c("h_cohort", "h_native_None", "e3_sex_None", "h_mbmi_None", "e3_gac_None", "hs_c_weight_None")
+
+# Extraire les données de covariates et phenotype
+covariates <- covariates %>% dplyr::select(all_of(specified_covariates))
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+phenotype$hs_Gen_Tot <- log(phenotype$hs_Gen_Tot + 1)
+
+# Vérifier les types de variables et convertir en facteurs si nécessaire
+covariates <- covariates %>% mutate_if(is.character, as.factor)
+
+# Fonction de validation des variables
+validate_variables <- function(variables, data) {
+  missing_vars <- variables[!variables %in% colnames(data)]
+  if (length(missing_vars) > 0) {
+    stop(paste("Les variables suivantes sont manquantes dans les données:", paste(missing_vars, collapse = ", ")))
+  }
+}
+
+# Fonction pour tester chaque exposome en incluant les covariables spécifiées
+test_exposomes <- function(exposomes, phenotype, covariates) {
+  validate_variables(colnames(exposomes), exposomes)
+  p_values <- data.frame(Exposome = colnames(exposomes), p_value = NA)
+  
+  for (i in 1:ncol(exposomes)) {
+    formula <- as.formula(paste("hs_Gen_Tot ~", colnames(exposomes)[i], "+", paste(specified_covariates, collapse = " + ")))
+    model <- lm(formula, data = cbind(phenotype, exposomes[, i, drop = FALSE], covariates))
+    p_values$p_value[i] <- summary(model)$coefficients[2, 4]
+  }
+  
+  return(p_values)
+}
+
+# Tester les exposomes et obtenir les p-values
+exposome_p_values <- test_exposomes(exposomes, phenotype, covariates)
+
+# Ajouter les familles aux p-values des exposomes à partir du codebook
+exposome_p_values <- exposome_p_values %>%
+  left_join(codebook, by = c("Exposome" = "variable_name"))
+
+# Créer un tableau de synthèse des covariables et exposomes retenus avec les p-values
+significant_exposomes <- exposome_p_values %>% filter(p_value < 0.05)
+
+summary_table <- bind_rows(
+  data.frame(Covariate = specified_covariates, p_value = NA, family = NA, Type = "Covariable"),
+  significant_exposomes %>% dplyr::select(Exposome, p_value, family) %>% rename(Covariate = Exposome) %>% mutate(Type = "Exposome")
+)
+
+# Afficher les tableaux de synthèse
+print("Tableau de synthèse des covariables et exposomes retenus :")
+print(summary_table)
+
+# Créer le dossier pour enregistrer les résultats
+output_dir <- "Resultats_RegLin_MonoVarié"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Enregistrer les tableaux de résultats dans des fichiers CSV
+write.csv(summary_table, file.path(output_dir, "summary_table.csv"), row.names = FALSE)
+
+# Ajouter les fonctions de calcul des indicateurs de qualité
+calculate_regression_metrics <- function(model, data, response) {
+  predictions <- predict(model, data)
+  actuals <- data[[response]]
+  residuals <- actuals - predictions
+  
+  # Calculer R²
+  r_squared <- summary(model)$r.squared
+  
+  # Calculer RMSE
+  rmse <- sqrt(mean(residuals^2))
+  
+  # Calculer MAE
+  mae <- mean(abs(residuals))
+  
+  return(data.frame(R_squared = r_squared, RMSE = rmse, MAE = mae))
+}
+
+# Créer un modèle ajusté avec les covariables spécifiées
+formula <- as.formula(paste("hs_Gen_Tot ~", paste(specified_covariates, collapse = " + ")))
+adjusted_model <- lm(formula, data = cbind(phenotype, covariates))
+summary(adjusted_model)
+
+# Calculer les indicateurs pour le modèle linéaire ajusté
+metrics_linear <- calculate_regression_metrics(adjusted_model, cbind(phenotype, covariates), "hs_Gen_Tot")
+
+# Afficher le tableau des indicateurs de qualité
+print("Tableau des indicateurs de qualité pour le modèle ajusté :")
+print(metrics_linear)
+
+# Sauvegarder le tableau des indicateurs de qualité dans un fichier CSV
+write.csv(metrics_linear, file.path(output_dir, "metrics_table.csv"), row.names = FALSE)
+
+# Créer un tableau avec le nombre d'exposomes retenus par famille
+exposomes_per_family <- significant_exposomes %>%
+  group_by(family) %>%
+  summarize(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100)
+
+# Ajouter les pourcentages aux noms de famille
+exposomes_per_family <- exposomes_per_family %>%
+  mutate(family = paste(family, "(", round(percentage, 1), "%)", sep = ""))
+
+# Afficher les tableaux
+print("Nombre d'exposomes retenus par famille :")
+print(exposomes_per_family)
+
+# Enregistrer les tableaux dans des fichiers CSV
+write.csv(exposomes_per_family, file.path(output_dir, "count_exposomes_by_family.csv"), row.names = FALSE)
+
+# Définir un vecteur de couleurs personnalisées
+custom_colors <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", 
+  "#7f7f7f", "#bcbd22", "#17becf", "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", 
+  "#c5b0d5", "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5", "#393b79", 
+  "#637939", "#8c6d31", "#843c39", "#7b4173"
+)
+
+# Fonction pour créer un camembert de la proportion des familles avec des couleurs franches et pourcentages dans la légende
+plot_family_pie <- function(exposomes_per_family, title) {
+  ggplot(exposomes_per_family, aes(x = "", y = count, fill = family)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    labs(title = title, fill = "Famille") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values=custom_colors)
+}
+
+# Afficher les camemberts
+plot_family_pie(exposomes_per_family, "Proportion des Familles")
+
+# Obtenir le top 5 des familles par proportion
+top_5_families <- exposomes_per_family %>%
+  arrange(desc(percentage)) %>%
+  head(5)
+
+# Afficher les top 5 familles avec leurs proportions
+print("Top 5 des familles avec leurs proportions :")
+print(top_5_families)
+
+# Enregistrer les résultats du top 5 dans un fichier CSV
+write.csv(top_5_families, file.path(output_dir, "top_5_families.csv"), row.names = FALSE)
+
+# Afficher le camembert pour le top 5 des familles
+plot_top_5_family_pie <- function(family_proportions, title) {
+  family_proportions <- family_proportions %>%
+    mutate(family_label = paste(family))
+  
+  ggplot(family_proportions, aes(x = "", y = percentage, fill = family_label)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    labs(title = title, fill = "Famille") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5)) + 
+    scale_fill_manual(values=custom_colors)
+}
+
+# Afficher les camemberts des top 5 familles
+plot_top_5_family_pie(top_5_families, "Familles les plus explicatives du phénotype")
+
+# Sauvegarder les camemberts
+ggsave("top_5_families_pie.png", plot = plot_top_5_family_pie(top_5_families, "Top 5 des Familles"), width = 8, height = 6)
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

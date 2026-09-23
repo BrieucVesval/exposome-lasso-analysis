@@ -1,0 +1,193 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les packages nécessaires
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("MASS")) install.packages("MASS")
+library(dplyr)
+library(MASS)
+
+
+
+### 1. Sans transformation 
+
+# Charger les données
+file_path <-  "processed_exposome.RData"
+load(file_path)
+
+# Extraire les données de covariates et phenotype
+covariates <- covariates %>% dplyr::select(-ID)
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+
+
+# Effectuer le test de normalité de Shapiro-Wilk
+shapiro_test <- shapiro.test(phenotype$hs_Gen_Tot)
+
+# Afficher la distribution de hs_Gen_Tot avec une courbe de densité normale superposée
+ggplot(phenotype, aes(x = hs_Gen_Tot)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  stat_function(fun = dnorm, args = list(mean = mean(phenotype$hs_Gen_Tot, na.rm = TRUE), sd = sd(phenotype$hs_Gen_Tot, na.rm = TRUE)), color = "red", size = 1) +
+  labs(title = "Distribution de hs_Gen_Tot avec courbe de densité normale",
+       x = "hs_Gen_Tot",
+       y = "Densité") +
+  theme_minimal() +
+  annotate("text", x = Inf, y = Inf, label = paste("Shapiro-Wilk p-value:", shapiro_test$p.value),
+           hjust = 1.1, vjust = 2, size = 5, color = "black")
+
+### 2. Transformation 0 en 10e-6
+  
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+
+# Remplacer les zéros par une petite valeur
+phenotype$hs_Gen_Tot[phenotype$hs_Gen_Tot == 0] <- 1e-6
+
+# Appliquer la transformation logarithmique
+phenotype$hs_Gen_Tot <- log(phenotype$hs_Gen_Tot)
+
+# Effectuer le test de normalité de Shapiro-Wilk
+shapiro_test_log <- shapiro.test(phenotype$hs_Gen_Tot)
+
+
+# Afficher la distribution de hs_Gen_Tot avec une courbe de densité normale superposée
+ggplot(phenotype, aes(x = hs_Gen_Tot)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  stat_function(fun = dnorm, args = list(mean = mean(phenotype$hs_Gen_Tot, na.rm = TRUE), sd = sd(phenotype$hs_Gen_Tot, na.rm = TRUE)), color = "red", size = 1) +
+  labs(title = "Distribution de log(hs_Gen_Tot) avec 0 décalé avec courbe de densité normale",
+       x = "hs_Gen_Tot",
+       y = "Densité") +
+  theme_minimal() +
+    annotate("text", x = Inf, y = Inf, label = paste("Shapiro-Wilk p-value:", shapiro_test_log$p.value),
+           hjust = 1.1, vjust = 2, size = 5, color = "black")
+
+
+
+# On reprend la valeur initiale 
+
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+
+#Transformation log+1
+
+phenotype$hs_Gen_Tot <- log(phenotype$hs_Gen_Tot+1)
+
+
+# Effectuer le test de normalité de Shapiro-Wilk
+shapiro_test_log <- shapiro.test(phenotype$hs_Gen_Tot)
+
+
+# Afficher la distribution de hs_Gen_Tot avec une courbe de densité normale superposée
+ggplot(phenotype, aes(x = hs_Gen_Tot)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  stat_function(fun = dnorm, args = list(mean = mean(phenotype$hs_Gen_Tot, na.rm = TRUE), sd = sd(phenotype$hs_Gen_Tot, na.rm = TRUE)), color = "red", size = 1) +
+  labs(title = "Distribution de log(hs_Gen_Tot)+1 avec courbe de densité normale",
+       x = "hs_Gen_Tot",
+       y = "Densité") +
+  theme_minimal() +
+    annotate("text", x = Inf, y = Inf, label = paste("Shapiro-Wilk p-value:", shapiro_test_log$p.value),
+           hjust = 1.1, vjust = 2, size = 5, color = "black")
+
+
+
+
+
+# Vérifier les types de variables et convertir en facteurs si nécessaire
+covariates <- covariates %>% mutate_if(is.character, as.factor)
+
+# Fonction de validation des variables
+validate_variables <- function(variables, data) {
+  missing_vars <- variables[!variables %in% colnames(data)]
+  if (length(missing_vars) > 0) {
+    stop(paste("Les variables suivantes sont manquantes dans les données:", paste(missing_vars, collapse = ", ")))
+  }
+}
+
+
+
+
+
+
+### 1. Selection covariables par pvalue
+
+
+# Fonction pour tester les covariables une par une
+test_covariates_pvalue <- function(covariates, phenotype) {
+  validate_variables(colnames(covariates), covariates)
+  p_values <- data.frame(Covariate = colnames(covariates), p_value = NA)
+  
+  for (i in 1:ncol(covariates)) {
+    formula <- as.formula(paste("hs_Gen_Tot ~ covariates[[i]]"))
+    model <- lm(formula, data = data.frame(hs_Gen_Tot = phenotype$hs_Gen_Tot, covariates[[i]]))
+    p_values$p_value[i] <- summary(model)$coefficients[2, 4]
+  }
+  
+  return(p_values)
+}
+
+# Tester les covariables et obtenir les p-values
+covariate_p_values <- test_covariates_pvalue(covariates, phenotype)
+
+# Sélectionner les covariables significatives
+significant_covariate_pvalue <- covariate_p_values %>% filter(p_value < 0.05)
+
+# Créer un tableau récapitulatif des covariables retenues par p-value
+summary_table_covariate_pvalue <- data.frame(
+  Covariate = significant_covariate_pvalue$Covariate,
+  p_value = significant_covariate_pvalue$p_value,
+  Type = "P-value"
+)
+
+# Écrire le tableau récapitulatif dans un fichier CSV
+write.csv(summary_table_covariate_pvalue, "significant_covariates_pvalue.csv", row.names = FALSE)
+
+### 2. Selection Covariables par Stepwise
+
+# Sélection des covariables par approche stepwise
+initial_model <- lm(hs_Gen_Tot ~ 1, data = cbind(phenotype, covariates))
+full_model <- lm(hs_Gen_Tot ~ ., data = cbind(phenotype, covariates))
+stepwise_model <- stepAIC(full_model, direction = "backward")
+
+
+# Obtenir les covariables sélectionnées
+selected_covariates_stepw <- names(coef(stepwise_model))[-1]
+
+# Supprimer la colonne ID si elle existe parmi les covariables sélectionnées
+selected_covariates_stepw <- selected_covariates_stepw[selected_covariates_stepw != "ID"]
+
+# Créer un tableau récapitulatif des covariables retenues par Stepwise
+summary_table_covariates_stepw <- data.frame(
+  Covariate = selected_covariates_stepw,
+  Type = "Stepwise"
+)
+write.csv(summary_table_covariates_stepw, "significant_covariates_stepwise.csv", row.names = FALSE)
+
+# Afficher les tableaux récapitulatifs des covariables retenues
+print("Tableau des covariables retenues par p-value :")
+print(summary_table_covariate_pvalue)
+
+print("Tableau des covariables retenues par Stepwise :")
+print(summary_table_covariates_stepw)
+
+# Ajouter un histogramme pour les p-values des covariables sélectionnées par la méthode p-value
+ggplot(significant_covariate_pvalue, aes(y = reorder(Covariate, p_value), x = p_value)) +
+  geom_bar(stat = "identity", fill = "blue", alpha = 0.7) +
+  labs(title = "P-values des covariables sélectionnées par la méthode p-value",
+       x = "p-value",
+       y = "Covariate") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8)) # Ajuster la taille du texte des étiquettes des covariables si nécessaire
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displa

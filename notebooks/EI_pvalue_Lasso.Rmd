@@ -1,0 +1,190 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les packages nécessaires
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("glmnet")) install.packages("glmnet")
+if (!require("tibble")) install.packages("tibble")
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(tibble)
+
+# Charger les données
+file_path <- "../data/exposome.RData"
+load(file_path)
+
+# Extraire les données de covariates et phenotype
+covariates <- covariates %>% dplyr::select(-ID)
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+
+# Vérifier les types de variables et convertir en facteurs si nécessaire
+covariates <- covariates %>% mutate_if(is.character, as.factor)
+exposomes <- exposome %>% dplyr::select(-ID)
+exposomes <- exposomes %>% mutate_if(is.character, as.factor)
+
+# Ajouter les familles d'exposomes
+exposome_families <- codebook %>% dplyr::select(variable_name, family)
+
+# Vérifier que toutes les variables existent dans les données avant de procéder
+validate_variables <- function(variables, data) {
+  missing_vars <- variables[!variables %in% colnames(data)]
+  if (length(missing_vars) > 0) {
+    stop(paste("Les variables suivantes sont manquantes dans les données:", paste(missing_vars, collapse = ", ")))
+  }
+}
+
+# Fonction pour tester les covariables une par une
+test_covariates <- function(covariates, phenotype) {
+  validate_variables(colnames(covariates), covariates)
+  p_values <- data.frame(Covariate = colnames(covariates), p_value = NA)
+  
+  for (i in 1:ncol(covariates)) {
+    formula <- as.formula(paste("phenotype$hs_Gen_Tot ~ covariates[[i]]"))
+    model <- lm(formula, data = data.frame(phenotype$hs_Gen_Tot, covariates[[i]]))
+    p_values$p_value[i] <- summary(model)$coefficients[2, 4]
+  }
+  
+  return(p_values)
+}
+
+# Tester les covariables et obtenir les p-values
+covariate_p_values <- test_covariates(covariates, phenotype)
+print(covariate_p_values)
+
+# Sélectionner les covariables significatives
+significant_covariates <- covariate_p_values %>% filter(p_value < 0.05)
+significant_covariate_names <- significant_covariates$Covariate
+
+# Utiliser model.matrix pour convertir les variables factorielles en variables indicatrices
+X_matrix <- model.matrix(~ . - 1, data = cbind(exposomes, covariates[, significant_covariate_names, drop = FALSE]))
+
+# Créer un vecteur de pénalités avec une pénalité très faible pour les covariables
+penalty_factors <- rep(1, ncol(X_matrix))
+penalty_factors[colnames(X_matrix) %in% significant_covariate_names] <- 0
+
+# Standardiser les variables
+X_scaled <- scale(X_matrix)
+
+# Appliquer la méthode LASSO avec des pénalités différentes
+lasso_model <- cv.glmnet(X_scaled, phenotype$hs_Gen_Tot, alpha = 1, family = "gaussian", penalty.factor = penalty_factors)
+
+# Obtenir les coefficients du modèle LASSO
+lasso_coefficients <- coef(lasso_model, s = "lambda.min")
+
+# Convertir les coefficients en dataframe pour une meilleure lisibilité
+lasso_coef_df <- as.data.frame(as.matrix(lasso_coefficients))
+lasso_coef_df <- tibble::rownames_to_column(lasso_coef_df, "Variable")
+lasso_coef_df <- lasso_coef_df %>% filter(s1 != 0)
+
+# Séparer les covariables et les exposomes retenus
+covariates_retained <- lasso_coef_df %>% filter(Variable %in% significant_covariate_names)
+exposomes_retained <- lasso_coef_df %>% filter(Variable %in% colnames(exposomes))
+
+# Ajouter les familles aux exposomes retenus
+exposomes_retained <- exposomes_retained %>% 
+  left_join(exposome_families, by = c("Variable" = "variable_name"))
+
+# Créer un tableau récapitulatif des exposomes retenus pour la méthode LASSO
+summary_table_exposomes_lasso <- exposomes_retained %>%
+  dplyr::select(Variable, s1, family) %>%
+  rename(Coefficient = s1) %>%
+  arrange(desc(abs(Coefficient)))
+
+# Sélectionner les 30 exposomes les plus significatifs
+top_30_exposomes <- summary_table_exposomes_lasso %>%
+  top_n(30, abs(Coefficient))
+
+# Compter le nombre d'exposomes par famille dans les 30 exposomes les plus significatifs
+exposomes_per_family <- top_30_exposomes %>%
+  group_by(family) %>%
+  summarize(count = n())
+
+# Créer un tableau récapitulatif des covariables retenues avec leurs coefficients
+summary_table_covariates <- covariates_retained %>%
+  rename(Coefficient = s1)
+
+# Afficher les tableaux de synthèse
+print("Tableau des exposomes retenus avec leurs coefficients :")
+print(summary_table_exposomes_lasso)
+
+print("Tableau des 30 exposomes les plus significatifs :")
+print(top_30_exposomes)
+
+print("Nombre d'exposomes par famille dans les 30 exposomes les plus significatifs :")
+print(exposomes_per_family)
+
+print("Tableau des covariables retenues avec leurs coefficients :")
+print(summary_table_covariates)
+
+# Créer le dossier pour enregistrer les résultats
+output_dir <- "Resultats_LASSO"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Enregistrer les tableaux de résultats dans des fichiers CSV
+write.csv(summary_table_exposomes_lasso, file.path(output_dir, "exposomes_retenus_lasso.csv"), row.names = FALSE)
+write.csv(top_30_exposomes, file.path(output_dir, "top_30_exposomes_lasso.csv"), row.names = FALSE)
+write.csv(exposomes_per_family, file.path(output_dir, "count_exposomes_by_family_lasso.csv"), row.names = FALSE)
+write.csv(summary_table_covariates, file.path(output_dir, "covariables_retenues_coefficients.csv"), row.names = FALSE)
+
+# Fonction pour calculer les indicateurs de qualité
+calculate_regression_metrics_lasso <- function(model, X, y) {
+  predictions <- predict(model, newx = X, s = "lambda.min")
+  residuals <- y - predictions
+  
+  # Calculer R²
+  ss_res <- sum(residuals^2)
+  ss_tot <- sum((y - mean(y))^2)
+  r_squared <- 1 - (ss_res / ss_tot)
+  
+  # Calculer RMSE
+  rmse <- sqrt(mean(residuals^2))
+  
+  # Calculer MAE
+  mae <- mean(abs(residuals))
+  
+  return(data.frame(R_squared = r_squared, RMSE = rmse, MAE = mae))
+}
+
+# Calculer les indicateurs pour le modèle LASSO ajusté
+metrics_lasso <- calculate_regression_metrics_lasso(lasso_model, X_scaled, phenotype$hs_Gen_Tot)
+
+# Ajouter les résultats au tableau récapitulatif
+summary_table_lasso <- summary_table_lasso %>%
+  mutate(R_squared = metrics_lasso$R_squared,
+         RMSE = metrics_lasso$RMSE,
+         MAE = metrics_lasso$MAE)
+
+# Créer un tableau récapitulatif des indicateurs de qualité
+metrics_table_lasso <- data.frame(
+  Model = "LASSO",
+  R_squared = metrics_lasso$R_squared,
+  RMSE = metrics_lasso$RMSE,
+  MAE = metrics_lasso$MAE
+)
+
+# Enregistrer le tableau des indicateurs de qualité dans un fichier CSV
+write.csv(metrics_table_lasso, file.path(output_dir, "regression_metrics_lasso.csv"), row.names = FALSE)
+
+# Afficher le tableau des indicateurs de qualité
+print(metrics_table_lasso)
+
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

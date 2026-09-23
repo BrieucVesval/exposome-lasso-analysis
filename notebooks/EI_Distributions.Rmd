@@ -1,0 +1,87 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les packages nécessaires
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("readr")) install.packages("readr")
+if (!require("stringr")) install.packages("stringr")
+if (!require("tibble")) install.packages("tibble")
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(tibble)
+
+# Charger les données
+file_path <- "../data/exposome.RData"
+load(file_path)
+
+# Fonction pour créer les dossiers et les fichiers des distributions
+create_distribution_files <- function(exposomes, phenotype, covariates, output_dir, n_bins = 30) {
+  # Créer les dossiers principaux
+  dir.create(output_dir, showWarnings = FALSE)
+  dir.create(file.path(output_dir, "Exposomes"), showWarnings = FALSE)
+  dir.create(file.path(output_dir, "Phenotypes"), showWarnings = FALSE)
+  dir.create(file.path(output_dir, "Covariates"), showWarnings = FALSE)
+  
+  # Fonction pour enregistrer les distributions
+  save_distribution <- function(data, variable, output_dir, n_bins) {
+    if (is.numeric(data[[variable]])) {
+      p <- ggplot(data, aes_string(x = variable)) +
+        geom_histogram(bins = n_bins, fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Distribution of", variable),
+             x = variable,
+             y = "Frequency") +
+        theme_minimal()
+    } else {
+      p <- ggplot(data, aes_string(x = variable)) +
+        geom_bar(stat = "count", fill = "blue", color = "black", alpha = 0.7) +
+        scale_x_discrete(drop = FALSE) +  # Keep all factor levels
+        labs(title = paste("Distribution of", variable),
+             x = variable,
+             y = "Frequency") +
+        theme_minimal()
+    }
+    
+    ggsave(file.path(output_dir, paste0(variable, "_distribution.png")), plot = p)
+  }
+  
+  # Sauvegarder les distributions pour les exposomes
+  exposome_variables <- colnames(exposomes)
+  for (variable in exposome_variables) {
+    save_distribution(exposomes, variable, file.path(output_dir, "Exposomes"), n_bins)
+  }
+  
+  # Sauvegarder les distributions pour les phénotypes
+  phenotype_variables <- colnames(phenotype)
+  for (variable in phenotype_variables) {
+    save_distribution(phenotype, variable, file.path(output_dir, "Phenotypes"), n_bins)
+  }
+  
+  # Sauvegarder les distributions pour les covariates
+  covariate_variables <- colnames(covariates)
+  for (variable in covariate_variables) {
+    save_distribution(covariates, variable, file.path(output_dir, "Covariates"), n_bins)
+  }
+}
+
+# Créer les dossiers et sauvegarder les distributions
+create_distribution_files(exposomes, phenotype, covariates, "output_distributions", n_bins = 30)
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

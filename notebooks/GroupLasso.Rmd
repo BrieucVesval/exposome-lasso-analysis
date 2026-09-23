@@ -1,0 +1,230 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Début de la mesure du temps
+start_time <- Sys.time()
+
+n_echant <- 225
+
+
+# Charger les packages nécessaires
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(dplyr, ggplot2, gglasso, RColorBrewer, broom)
+
+set.seed(12345)
+
+# Charger les données
+file_path <- "../data/exposome.RData"
+load(file_path)
+
+file_path <- "processed_exposome.RData"
+load(file_path)
+
+# Covariables spécifiées
+specified_covariates <- c("h_cohort", "h_native_None", "e3_sex_None", "h_mbmi_None", "e3_gac_None", "hs_c_weight_None")
+
+# Préparer les données
+cat("Préparation des données...\n")
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+phenotype$hs_Gen_Tot <- log(phenotype$hs_Gen_Tot + 1)
+
+# Créer une matrice de design pour les covariables spécifiées
+cat("Création de la matrice de design pour les covariables...\n")
+x_covariates <- model.matrix(~ . - 1, data = covariates[, specified_covariates, drop = FALSE])
+
+# Créer une matrice de design pour les expositions
+cat("Création de la matrice de design pour les expositions...\n")
+x_exposomes <- model.matrix(~ . - 1, data = exposomes)
+
+# Vérifier les dimensions des matrices
+cat("Dimensions de x_covariates:", dim(x_covariates), "\n")
+cat("Dimensions de x_exposomes:", dim(x_exposomes), "\n")
+
+# Limiter à un sous-échantillon pour le test
+sample_indices <- sample(1:nrow(x_exposomes), n_echant)  # Utiliser 100 échantillons pour le test
+x_exposomes <- x_exposomes[sample_indices,]
+x_covariates <- x_covariates[sample_indices,]
+phenotype <- phenotype[sample_indices,]
+
+# Préparer les groupes pour les expositions basés sur les familles
+cat("Préparation des groupes...\n")
+exposome_families_filtered <- codebook %>% filter(variable_name %in% colnames(x_exposomes))
+group_indices <- match(exposome_families_filtered$variable_name, colnames(x_exposomes))
+groups <- as.numeric(factor(exposome_families_filtered$family))
+
+# Combiner les matrices de covariates et d'expositions
+cat("Combinaison des matrices de covariates et d'expositions...\n")
+x_combined <- cbind(x_covariates, x_exposomes)
+
+# Préparer les groupes combinés
+group_covariates <- seq(1, ncol(x_covariates))
+group_combined <- c(group_covariates, groups + length(group_covariates))
+
+# Créer un vecteur de pénalités : 0 pour les covariables, 1 pour les expositions
+penalties <- c(rep(0, length(unique(group_covariates))), rep(1, length(unique(groups))))
+
+print(group_combined)
+print(penalties)
+# Vérifier la compatibilité des dimensions des groupes et des colonnes de x_combined
+if (length(group_combined) != ncol(x_combined)) {
+  stop("La dimension des groupes n'est pas compatible avec les colonnes combinées.")
+}
+
+# Ajuster le modèle Group Lasso avec validation croisée en tenant compte des groupes et des pénalités
+cat("Ajustement du modèle Group Lasso avec validation croisée...\n")
+cv_fit <- cv.gglasso(x_combined, phenotype$hs_Gen_Tot, group = group_combined, pf = penalties,nfolds = 3, nlambda = 10)
+
+# Sélectionner le meilleur lambda
+cat("Sélection du meilleur lambda...\n")
+best_lambda <- cv_fit$lambda.min
+
+# Ajuster le modèle avec le meilleur lambda
+cat("Ajustement du modèle avec le meilleur lambda...\n")
+fit <- gglasso(x_combined, phenotype$hs_Gen_Tot, group = group_combined, lambda = best_lambda, pf = penalties)
+
+# Obtenir les coefficients non nuls avec le meilleur lambda
+cat("Obtention des coefficients non nuls...\n")
+coef_fit <- coef(fit, s = best_lambda)
+nonzero_indices <- which(coef_fit != 0)
+nonzero_coefs <- coef_fit[nonzero_indices]
+nonzero_variables <- rownames(coef_fit)[nonzero_indices]
+
+# Filtrer les expositions seulement
+cat("Filtrage des expositions...\n")
+nonzero_exposomes <- nonzero_variables[nonzero_variables %in% colnames(x_exposomes)]
+nonzero_exposomes_coefs <- nonzero_coefs[match(nonzero_exposomes, nonzero_variables)]
+
+# Calculer la proportion de chaque famille pondérée par leur coefficient dans la régression
+cat("Calcul des proportions...\n")
+coef_data <- data.frame(variable = nonzero_exposomes, coefficient = nonzero_exposomes_coefs)
+coef_data <- coef_data %>%
+  left_join(exposome_families_filtered, by = c("variable" = "variable_name")) %>%
+  group_by(family) %>%
+  summarize(weighted_sum = sum(abs(coefficient))) %>%
+  mutate(proportion = weighted_sum / sum(weighted_sum) * 100)
+
+print(coef_data)
+
+# Afficher les résultats sous forme de camembert avec pourcentages
+cat("Affichage des résultats...\n")
+plot_family_pie <- function(coef_data, title) {
+  coef_data <- coef_data %>%
+    mutate(family_label = paste(family, "(", round(proportion, 1), "%)", sep = ""))
+  
+  ggplot(coef_data, aes(x = "", y = proportion, fill = family_label)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    labs(title = title, fill = "Famille") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5)) +
+    scale_fill_brewer(palette = "Paired")
+}
+
+# Afficher le camembert des proportions des familles
+plot_family_pie(coef_data, "Proportion des Familles Pondérée par les Coefficients (Group Lasso)")
+
+# Calculer les indicateurs de précision de la régression
+cat("Calcul des indicateurs de précision...\n")
+calculate_regression_metrics <- function(model, data, response, lambda) {
+  predictions <- predict(model, newx = data, s = lambda)
+  actuals <- response
+  residuals <- actuals - predictions
+  
+  # Calculer R²
+  ss_res <- sum(residuals^2)
+  ss_tot <- sum((actuals - mean(actuals))^2)
+  r_squared <- 1 - (ss_res / ss_tot)
+  
+  # Calculer RMSE
+  rmse <- sqrt(mean(residuals^2))
+  
+  # Calculer MAE
+  mae <- mean(abs(residuals))
+  
+  return(data.frame(R_squared = r_squared, RMSE = rmse, MAE = mae))
+}
+
+# Calculer les indicateurs pour le modèle Group Lasso
+metrics_group_lasso <- calculate_regression_metrics(fit, x_combined, phenotype$hs_Gen_Tot, best_lambda)
+
+# Afficher les indicateurs de précision de la régression
+print("Tableau des indicateurs de précision de la régression (Group Lasso) :")
+print(metrics_group_lasso)
+
+# Sauvegarder les résultats dans des fichiers CSV
+output_dir <- "Resultats_Group_Lasso"
+dir.create(output_dir, showWarnings = FALSE)
+
+write.csv(coef_data, file.path(output_dir, "coef_data.csv"), row.names = FALSE)
+write.csv(metrics_group_lasso, file.path(output_dir, "metrics_group_lasso.csv"), row.names = FALSE)
+
+# Obtenir le top 5 des familles par proportion
+top_5_families <- coef_data %>%
+  arrange(desc(proportion)) %>%
+  head(5)
+
+# Afficher le top 5 des familles avec leurs proportions
+print("Top 5 des familles avec leurs proportions :")
+print(top_5_families)
+
+# Définir un vecteur de couleurs personnalisées
+custom_colors <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", 
+  "#7f7f7f", "#bcbd22", "#17becf", "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", 
+  "#c5b0d5", "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5", "#393b79", 
+  "#637939", "#8c6d31", "#843c39", "#7b4173"
+)
+
+
+
+# Optionnel : Afficher le camembert pour le top 5 des familles
+plot_top_5_family_pie <- function(coef_data, title) {
+  coef_data <- coef_data %>%
+    mutate(family_label = paste(family, "(", round(proportion, 1), "%)", sep = ""))
+  
+  ggplot(coef_data, aes(x = "", y = proportion, fill = family_label)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    labs(title = title, fill = "Famille") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values = custom_colors)
+}
+
+# Afficher le camembert des proportions des familles pour le top 5
+plot_top_5_family_pie(top_5_families, paste("Familles principales (Group Lasso) pour un échantillon de", n_echant))
+
+
+# Sauvegarder les résultats du top 5 dans un fichier CSV
+write.csv(top_5_families, file.path(output_dir, "top_5_families.csv"), row.names = FALSE)
+
+# Fin de la mesure du temps
+end_time <- Sys.time()
+
+# Calcul du temps d'exécution
+execution_time <- end_time - start_time
+print(paste("Temps d'exécution :", execution_time))
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

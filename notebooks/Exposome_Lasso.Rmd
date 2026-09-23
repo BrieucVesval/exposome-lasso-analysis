@@ -1,0 +1,240 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les packages nécessaires
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("glmnet")) install.packages("glmnet")
+if (!require("RColorBrewer")) install.packages("RColorBrewer")
+if (!require("broom")) install.packages("broom")
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(RColorBrewer)
+library(broom)
+
+set.seed(12345)
+
+# Charger les données
+file_path <- "processed_exposome.RData"
+if (file.exists(file_path)) {
+  load(file_path)
+} else {
+  stop("Le fichier processed_exposome.RData n'existe pas. Veuillez vérifier le chemin du fichier.")
+}
+
+# Vérifier que les colonnes nécessaires existent dans le codebook
+required_columns <- c("variable_name", "family", "subfamily", "period")
+missing_columns <- setdiff(required_columns, colnames(codebook))
+if (length(missing_columns) > 0) {
+  stop(paste("Les colonnes suivantes sont manquantes dans le codebook:", paste(missing_columns, collapse = ", ")))
+}
+
+# Covariables spécifiées
+specified_covariates <- c("h_cohort", "h_native_None", "e3_sex_None", "h_mbmi_None", "e3_gac_None", "hs_c_weight_None")
+
+# Préparer les données
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+phenotype$hs_Gen_Tot <- log(phenotype$hs_Gen_Tot + 1)
+
+# Créer une matrice de design pour les covariables spécifiées
+x_covariates <- model.matrix(~ . - 1, data = covariates[, specified_covariates, drop = FALSE])
+
+# Créer une matrice de design pour les expositions
+x_exposomes <- model.matrix(~ . - 1, data = exposomes)
+
+# Combiner les matrices de covariates et d'expositions
+x_combined <- cbind(x_covariates, x_exposomes)
+
+# Préparer les pénalités : zéro pour les covariates spécifiées, 1 pour les expositions
+penalties <- c(rep(0, ncol(x_covariates)), rep(1, ncol(x_exposomes)))
+
+# Ajuster le modèle Lasso avec validation croisée
+cv_fit <- cv.glmnet(x_combined, phenotype$hs_Gen_Tot, family = "gaussian", alpha = 1, penalty.factor = penalties)
+
+# Sélectionner le meilleur lambda
+best_lambda <- cv_fit$lambda.min
+
+# Ajuster le modèle avec le meilleur lambda
+fit <- glmnet(x_combined, phenotype$hs_Gen_Tot, family = "gaussian", alpha = 1, penalty.factor = penalties, lambda = best_lambda)
+
+# Obtenir les coefficients non nuls avec le meilleur lambda
+coef_fit <- coef(fit, s = best_lambda)
+nonzero_indices <- which(coef_fit != 0)
+nonzero_coefs <- coef_fit[nonzero_indices]
+nonzero_variables <- rownames(coef_fit)[nonzero_indices]
+
+# Filtrer les expositions seulement
+nonzero_exposomes <- nonzero_variables[nonzero_variables %in% colnames(x_exposomes)]
+nonzero_exposomes_coefs <- nonzero_coefs[match(nonzero_exposomes, nonzero_variables)]
+
+# Stocker les coefficients dans un dataframe
+coef_data <- data.frame(variable = nonzero_exposomes, coefficient = nonzero_exposomes_coefs)
+coef_data <- coef_data %>%
+  left_join(codebook, by = c("variable" = "variable_name"))
+
+# Partie 2 : Calcul des proportions pour chaque famille principale
+# Calculer la proportion de chaque famille pondérée par leur coefficient dans la régression
+family_proportions <- coef_data %>%
+  group_by(family) %>%
+  summarize(weighted_sum = sum(abs(coefficient))) %>%
+  mutate(proportion = weighted_sum / sum(weighted_sum) * 100)
+
+# Obtenir les 5 familles principales par proportion
+top_5_families <- family_proportions %>%
+  arrange(desc(proportion)) %>%
+  head(5)
+
+print("Top 5 des familles principales avec leurs proportions :")
+print(top_5_families)
+
+# Partie 3 : Calcul des proportions des sous-familles pour chaque famille principale
+# Calculer les proportions des sous-familles pour chaque famille principale
+subfamily_proportions <- list()
+
+for (family in top_5_families$family) {
+  cat("Calcul des proportions pour les sous-familles de la famille :", family, "\n")
+  
+  subfamily_data <- coef_data %>%
+    filter(family == !!family) %>%
+    group_by(subfamily) %>%
+    summarize(weighted_sum = sum(abs(coefficient))) %>%
+    mutate(proportion = weighted_sum / sum(weighted_sum) * 100)
+  
+  subfamily_proportions[[family]] <- subfamily_data %>%
+    arrange(desc(proportion)) %>%
+    head(3)  # Obtenir les 3 plus grandes sous-familles
+}
+
+print("Proportions des 3 plus grandes sous-familles pour chaque famille principale :")
+print(subfamily_proportions)
+
+# Partie 4 : Calcul de la répartition entre "Prégnance" et "Postnatal" pour chaque famille principale
+# Calculer la répartition entre "Prégnance" et "Postnatal" pour chaque famille principale
+period_distribution <- list()
+
+for (family in top_5_families$family) {
+  cat("Calcul de la répartition des périodes pour la famille :", family, "\n")
+  
+  period_data <- coef_data %>%
+    filter(family == !!family) %>%
+    group_by(period) %>%
+    summarize(weighted_sum = sum(abs(coefficient))) %>%
+    mutate(proportion = weighted_sum / sum(weighted_sum) * 100)
+  
+  period_distribution[[family]] <- period_data
+}
+
+print("Répartition entre Prégnance et Postnatal pour chaque famille principale :")
+print(period_distribution)
+
+# Définir un vecteur de couleurs personnalisées
+custom_colors <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", 
+  "#7f7f7f", "#bcbd22", "#17becf", "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", 
+  "#c5b0d5", "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5", "#393b79", 
+  "#637939", "#8c6d31", "#843c39", "#7b4173"
+)
+
+
+
+# Fonction pour afficher un camembert
+plot_pie_chart <- function(data, title, fill_label, label_column, total_label) {
+  data <- data %>%
+    mutate(label = paste0(!!sym(label_column), " (", round(proportion, 1), "% du total)"))
+  
+  ggplot(data, aes(x = "", y = proportion, fill = label)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    labs(title = title, fill = fill_label) +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values=custom_colors) +
+    guides(fill = guide_legend(title = paste(fill_label, total_label)))
+}
+
+# Afficher les camemberts pour les familles principales
+print(plot_pie_chart(top_5_families, "5 Familles Principales par Méthode Lasso", "Famille", "family", "(% du total)"))
+
+# Afficher les camemberts pour les sous-familles des familles principales
+for (family in names(subfamily_proportions)) {
+  print(plot_pie_chart(subfamily_proportions[[family]], paste("Sous-Familles Principales de", family), "Sous-Famille", "subfamily", "(% du total)"))
+}
+
+# Afficher les camemberts pour la répartition entre "Prégnance" et "Postnatal"
+plot_period_pie_chart <- function(data, title) {
+  data <- data %>%
+    mutate(label = paste0(period, " (", round(proportion, 1), "% du total)"))
+  
+  ggplot(data, aes(x = "", y = proportion, fill = label)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    labs(title = title, fill = "Période") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values=custom_colors)+
+    guides(fill = guide_legend(title = "Période (% du total)"))
+}
+
+for (family in top_5_families$family) {
+  print(plot_period_pie_chart(period_distribution[[family]], paste("Répartition Pregnancy/Postnatal pour", family)))
+}
+
+
+# Fonction pour calculer les indicateurs de qualité
+calculate_regression_metrics <- function(model, data, response) {
+  predictions <- predict(model, newx = data, s = model$lambda)
+  actuals <- response
+  residuals <- actuals - predictions
+  
+  # Calculer R²
+  ss_res <- sum(residuals^2)
+  ss_tot <- sum((actuals - mean(actuals))^2)
+  r_squared <- 1 - (ss_res / ss_tot)
+  
+  # Calculer RMSE
+  rmse <- sqrt(mean(residuals^2))
+  
+  # Calculer MAE
+  mae <- mean(abs(residuals))
+  
+  return(data.frame(R_squared = r_squared, RMSE = rmse, MAE = mae))
+}
+
+# Calculer les indicateurs pour le modèle Lasso
+lasso_metrics <- calculate_regression_metrics(fit, x_combined, phenotype$hs_Gen_Tot)
+
+# Afficher le tableau des indicateurs de qualité
+print("Tableau des indicateurs de qualité pour le modèle Lasso :")
+print(lasso_metrics)
+
+# Sauvegarder le tableau des indicateurs de qualité dans un fichier CSV
+output_dir <- "Resultats_RegLin_MonoVarié"
+dir.create(output_dir, showWarnings = FALSE)
+write.csv(lasso_metrics, file.path(output_dir, "lasso_metrics.csv"), row.names = FALSE)
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

@@ -1,0 +1,180 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Charger les packages nécessaires
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("tibble")) install.packages("tibble")
+if (!require("glmnet")) install.packages("glmnet")
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(glmnet)
+
+# Charger les données
+file_path <- "../data/exposome.RData"
+load(file_path)
+
+# Extraire les données de covariates et phenotype
+covariates <- covariates %>% dplyr::select(-ID)
+phenotype <- phenotype %>% dplyr::select(ID, hs_Gen_Tot)
+phenotype$hs_Gen_Tot <- log(phenotype$hs_Gen_Tot+1)
+
+# Créer un modèle ajusté avec les covariables significatives
+formula <- as.formula(paste("hs_Gen_Tot ~", paste(significant_covariate_names, collapse = " + ")))
+adjusted_model <- lm(formula, data = cbind(phenotype, covariates[, significant_covariate_names, drop = FALSE]))
+summary(adjusted_model)
+
+# Fonction pour tester chaque exposome en incluant les covariables significatives
+test_exposomes <- function(exposomes, phenotype, significant_covariate_names) {
+  validate_variables(colnames(exposomes), exposomes)
+  p_values <- data.frame(Exposome = colnames(exposomes), p_value = NA)
+  
+  for (i in 1:ncol(exposomes)) {
+    formula <- as.formula(paste("hs_Gen_Tot ~", colnames(exposomes)[i], "+", paste(significant_covariate_names, collapse = " + ")))
+    model <- lm(formula, data = cbind(phenotype, exposomes[, i, drop = FALSE], covariates[, significant_covariate_names, drop = FALSE]))
+    p_values$p_value[i] <- summary(model)$coefficients[2, 4]
+  }
+  
+  return(p_values)
+}
+
+# Tester les exposomes et obtenir les p-values
+exposome_p_values <- test_exposomes(exposomes, phenotype, significant_covariate_names)
+
+# Ajouter les familles aux p-values des exposomes
+exposome_p_values <- exposome_p_values %>% 
+  left_join(exposome_families, by = c("Exposome" = "variable_name"))
+
+# Fonction pour créer un histogramme des p-values des covariables
+plot_covariate_p_values <- function(covariate_p_values) {
+  ggplot(covariate_p_values, aes(x = reorder(Covariate, p_value), y = p_value)) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    labs(title = "P-values des Covariables",
+         x = "Covariable",
+         y = "P-value") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+}
+
+# Afficher l'histogramme des p-values des covariables
+plot_covariate_p_values(covariate_p_values)
+
+# Fonction pour créer un histogramme des p-values des exposomes
+plot_exposome_p_values <- function(exposome_p_values) {
+  ggplot(exposome_p_values, aes(x = reorder(Exposome, p_value), y = p_value, fill = family)) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    labs(title = "P-values des Exposomes",
+         x = "Exposome",
+         y = "P-value") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    scale_fill_discrete(name = "Famille")
+}
+
+# Afficher l'histogramme des p-values des exposomes
+plot_exposome_p_values(exposome_p_values)
+
+# Créer un tableau de synthèse des covariables et exposomes retenus avec les p-values
+significant_exposomes <- exposome_p_values %>% filter(p_value < 0.05)
+
+summary_table <- bind_rows(
+  significant_covariates %>% mutate(Type = "Covariable"),
+  significant_exposomes %>% dplyr::select(Exposome, p_value, family) %>% rename(Covariate = Exposome) %>% mutate(Type = "Exposome")
+)
+
+summary_table <- summary_table %>% arrange(p_value)
+
+# Améliorer la présentation du tableau récapitulatif
+summary_table <- summary_table %>%
+  mutate(Type = ifelse(Type == "Exposome", paste(Type, "(", family, ")", sep = ""), Type)) %>%
+  dplyr::select(Type, Covariate, p_value) %>%
+  arrange(p_value)
+
+# Afficher le tableau de synthèse
+print(summary_table)
+
+# Fonction pour créer un histogramme des p-values des exposomes retenus uniquement
+plot_significant_exposome_p_values <- function(significant_exposomes) {
+  ggplot(significant_exposomes, aes(x = reorder(Exposome, p_value), y = p_value, fill = family)) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    labs(title = "P-values des Exposomes Retenus",
+         x = "Exposome",
+         y = "P-value") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    scale_fill_discrete(name = "Famille")
+}
+
+# Afficher l'histogramme des p-values des exposomes retenus
+plot_significant_exposome_p_values(significant_exposomes)
+
+# Créer le dossier pour enregistrer les résultats
+output_dir <- "Resultats_RegLin_MonoVarié"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Enregistrer les tableaux de résultats dans des fichiers CSV
+write.csv(significant_covariates, file.path(output_dir, "significant_covariates.csv"), row.names = FALSE)
+write.csv(significant_exposomes, file.path(output_dir, "significant_exposomes.csv"), row.names = FALSE)
+write.csv(summary_table, file.path(output_dir, "summary_table.csv"), row.names = FALSE)
+
+# Ajouter les fonctions de calcul des indicateurs de qualité
+calculate_regression_metrics <- function(model, data, response) {
+  predictions <- predict(model, data)
+  actuals <- data[[response]]
+  residuals <- actuals - predictions
+  
+  # Calculer R²
+  r_squared <- summary(model)$r.squared
+  
+  # Calculer RMSE
+  rmse <- sqrt(mean(residuals^2))
+  
+  # Calculer MAE
+  mae <- mean(abs(residuals))
+  
+  return(data.frame(R_squared = r_squared, RMSE = rmse, MAE = mae))
+}
+
+# Calculer les indicateurs pour le modèle linéaire ajusté
+metrics_linear <- calculate_regression_metrics(adjusted_model, cbind(phenotype, covariates[, significant_covariate_names, drop = FALSE]), "hs_Gen_Tot")
+
+# Ajouter les résultats au tableau récapitulatif
+summary_table <- summary_table %>%
+  mutate(R_squared = metrics_linear$R_squared,
+         RMSE = metrics_linear$RMSE,
+         MAE = metrics_linear$MAE)
+
+# Créer un tableau récapitulatif des indicateurs de qualité
+metrics_table <- data.frame(
+  Model = "Linear Regression",
+  R_squared = metrics_linear$R_squared,
+  RMSE = metrics_linear$RMSE,
+  MAE = metrics_linear$MAE
+)
+
+# Enregistrer le tableau des indicateurs de qualité dans un fichier CSV
+write.csv(metrics_table, file.path(output_dir, "regression_metrics.csv"), row.names = FALSE)
+
+# Afficher le tableau des indicateurs de qualité
+print(metrics_table)
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

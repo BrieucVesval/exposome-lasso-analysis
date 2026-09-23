@@ -1,0 +1,43 @@
+"Type","Covariate","p_value"
+"Exposome(Organochlorines)","hs_pcb180_cadj_Log2",2.55194270265874e-06
+"Covariable","h_native_None",9.73104536416384e-05
+"Covariable","h_cohort",0.000174284036591674
+"Exposome(Organochlorines)","hs_pcb170_cadj_Log2",0.000237899260910784
+"Exposome(Meteorological)","hs_hum_dy_hs_h_None",0.000336115823955173
+"Covariable","h_age_None",0.000359658512729162
+"Exposome(Lifestyle)","hs_dif_hours_total_None",0.00036442362273092
+"Covariable","h_mbmi_None",0.000499529090248877
+"Exposome(Indoor air)","h_PM_Log",0.000552511979545501
+"Exposome(Lifestyle)","hs_KIDMED_None",0.000668392601417183
+"Exposome(Indoor air)","h_Benzene_Log",0.000868788884403034
+"Exposome(Per- and polyfluoroalkyl substances (PFAS))","hs_pfos_c_Log2",0.00121702258957497
+"Exposome(Phthalates)","hs_mecpp_cadj_Log2",0.00121721368046044
+"Exposome(Per- and polyfluoroalkyl substances (PFAS))","hs_pfna_m_Log2",0.00151845787577438
+"Exposome(Lifestyle)","hs_total_lipids_Ter",0.00325319645250166
+"Exposome(Metals)","hs_mn_m_Log2",0.00343226816872355
+"Exposome(Air Pollution)","h_abs_ratio_preg_Log",0.00376717276734432
+"Exposome(Phthalates)","hs_meohp_cadj_Log2",0.00405899808849672
+"Covariable","hs_c_weight_None",0.0044956088226148
+"Exposome(Metals)","hs_pb_c_Log2",0.00664639853300755
+"Exposome(Organochlorines)","hs_sumPCBs5_cadj_Log2",0.00835011490668283
+"Exposome(Tobacco Smoke)","hs_smk_parents_None",0.00870189999495561
+"Exposome(Air Pollution)","h_pm25_ratio_preg_None",0.0099701838809041
+"Covariable","e3_gac_None",0.0115417258569758
+"Exposome(Phthalates)","hs_mehhp_cadj_Log2",0.0133569329546323
+"Exposome(Phenols)","hs_etpa_madj_Log2",0.0188066507826044
+"Covariable","e3_sex_None",0.0222975954638416
+"Exposome(Organochlorines)","hs_pcb153_cadj_Log2",0.0241321452406829
+"Exposome(Air Pollution)","hs_pm25abs_yr_hs_h_Log",0.0250118263606794
+"Exposome(Tobacco Smoke)","hs_cotinine_cdich_None",0.0296001127064924
+"Exposome(Organochlorines)","hs_dde_cadj_Log2",0.0311068935979591
+"Exposome(Lifestyle)","hs_break_cer_Ter",0.0316785933159004
+"Exposome(Per- and polyfluoroalkyl substances (PFAS))","hs_pfoa_c_Log2",0.0320747581891519
+"Exposome(Air Pollution)","hs_pm10_yr_hs_h_None",0.0329594803094036
+"Exposome(Phenols)","hs_mepa_madj_Log2",0.0332317477115141
+"Exposome(Phenols)","hs_trcs_madj_Log2",0.0374128255139227
+"Exposome(Phenols)","hs_prpa_cadj_Log2",0.0429286671603867
+"Exposome(Metals)","hs_pb_m_Log2",0.0441922006741096
+"Exposome(Phthalates)","hs_mnbp_cadj_Log2",0.0445873588732248
+"Exposome(Phthalates)","hs_mep_cadj_Log2",0.0449007289726989
+"Exposome(Air Pollution)","hs_pm10_wk_hs_h_None",0.047501450758418
+"Exposome(Built environment)","h_fdensity300_preg_Log",0.0490752156666346

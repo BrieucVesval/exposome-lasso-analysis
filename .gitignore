@@ -1,0 +1,9 @@
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+*.nb.html
+
+# Health dataset: never commit
+data/
+*.RData
